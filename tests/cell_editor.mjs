@@ -13,7 +13,7 @@ if (inp === "--version") {
   process.exit(0);
 }
 if (inp === "--count") {
-  console.log(["0.9.5", "1.0.0", "1.1.0", "2.0.0"].map(api.cellCount).join(" ") + " " + api.cellCount(null));
+  console.log(["0.9.5", "1.0.0", "1.1.0", "1.2.0", "2.0.0"].map(api.cellCount).join(" ") + " " + api.cellCount(null));
   process.exit(0);
 }
 if (inp === "--meta") {

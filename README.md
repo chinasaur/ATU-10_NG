@@ -6,7 +6,8 @@ stable tuner – not the fastest tune.
 
 ![Display](docs/display-main.png)
 
-**Status: 1.1.0, tested on the device.** See the [timeline](#development-status) below.
+The latest release is 1.1.0. See the [timeline](#development-status) below.
+Version 1.2.0 has been tested on device but no official release yet.
 
 ## Contents
 
@@ -253,6 +254,7 @@ For a transceiver that controls the tuner through the start and key lines:
 | 11 | Tune target: stop at this SWR (0 = always the full search) | 1.05 |
 | 12 | Search effort: 1 quick, 2 normal, 3 thorough | 2 |
 | 13 | Display: classic, or the [relay view](#relay-view) | classic |
+| 14 | EXT: Icom interface or UART | Icom |
 
 **1. Menu on the tuner:** keep the button pressed when switching on, through
 the greeting, until SETUP appears. A short press changes the value, a long
@@ -287,6 +289,45 @@ for you.
 **Which values apply:** values saved in the menu take precedence over the hex
 file – until you flash a hex file with other settings (then those apply) or
 choose HEX VALUES in the menu.
+
+## UART interface
+
+The optional UART interface can be activated on the EXT port via menu setting 14.
+The UART runs at 2400 baud and recognizes a minimal set of commands for querying
+and controlling the ATU. For simplicity, the UART does not operate Rx and Tx at the
+same time; for query commands that elicit a reply, the client should wait for the
+reply before sending another command. All commands and replies terminate with a
+semicolon.
+
+The supported commands are (defined in uart.h):
+- Bypass on: BY+;
+- Bypass off: BY-;
+- Auto tune on: AU+;
+- Auto tune off: AU-;
+- Set inductance relays: L=X; where X is an integer 0..127 inclusive defining the
+  relay bitmask. If bypass is on, this sets the desired value in memory and the 
+  relays will be set accordingly once bypass is switched off.
+- Set capacitance relays: C=X; also 0..127 inclusive.
+- Set capacitance to the load side: LC;
+- Set capacitance to the source side: CL;
+- Query inductance relays: L?; returns integer 0..127.
+- Query capacitance relays: C?; returns integer 0..127.
+- Query capacitance load / source side: LC?; returns LC or CL.
+- Query bypass: BY?; returns + or -.
+- Query auto tune: AU?; returns + or -.
+- Query current SWR: SWR?; returns SWR in hundredths, so for a SWR of 1.91:1 will
+  return 191. Or returns 0 if there is no current transmission.
+- Query current power: PWR?; returns tenths of a watt, or 0 if current power is below
+  detection threshold.
+- Query last displayed SWR: LSW?; returns the cached display value in
+  hundredths (0 until an SWR has been measured).
+- Query recent peak power: PK?;
+
+On the hardware side, the UART Tx is on pin D1, which is wired to the EXT ring line, 
+and the UART Rx is on pin D2, which is wired to the EXT tip line. The ATU-10 runs
+these lines at battery voltage, so to interface with standard 3v3 or 5v logic requires
+voltage protection. For 3v3 some series resistance and external clamping diodes should
+be sufficient.
 
 ## Questions
 
@@ -324,6 +365,7 @@ not come on, switch the tuner off and on again.
 | 2026-10-06 | 0.9.6 | release, tested on the device | less current while switched off, 15 µA (FW 1.6: 75 µA): display lines released, no input buffers on open lines |
 | 2026-10-06 | 1.0.0 | release, tested on the device | nothing left to improve: the same as 0.9.6, only the version number grew up |
 | 2026-10-10 | 1.1.0 | release, tested on the device | relay view (setting 13): the L and C relays, their values and the capacitor side on the display; capacitor side checked on the device |
+| 2026-10-17 | 1.2.0 | development | select legacy ICOM or software UART external interface in setting 14 |
 
 More: [Changelog](CHANGELOG.md) · [Settings in detail](docs/SETTINGS.md) · [How tuning works](docs/TUNING.md) · [Comparison with FW 1.6](docs/COMPARISON.md) · [Development](docs/DEVELOPMENT.md)
 

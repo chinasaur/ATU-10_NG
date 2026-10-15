@@ -2,10 +2,10 @@
 
 uint8_t cfg[CELL_COUNT];
 
-//                                      1   2   3   4   5   6   7   8   9  10  11  12  13
-const uint8_t cell_min[CELL_COUNT] = {  0,  0,  2,  1,  1, 11,  0,  0,  0,  1,  0,  1,  0 };
-const uint8_t cell_max[CELL_COUNT] = { 99, 99, 30, 99, 99, 99,  1, 99, 99, 99, 99,  3,  1 };
-const uint8_t cell_def[CELL_COUNT] = {  5, 30, 10, 10, 15, 13,  1,  4, 14, 60,  5,  2,  0 };
+//                                      1   2   3   4   5   6   7   8   9  10  11  12  13  14
+const uint8_t cell_min[CELL_COUNT] = {  0,  0,  2,  1,  1, 11,  0,  0,  0,  1,  0,  1,  0,  0 };
+const uint8_t cell_max[CELL_COUNT] = { 99, 99, 30, 99, 99, 99,  1, 99, 99, 99, 99,  3,  1,  1 };
+const uint8_t cell_def[CELL_COUNT] = {  5, 30, 10, 10, 15, 13,  1,  4, 14, 60,  5,  2,  0,  0 };
 
 #ifdef __XC8
 // volatile: the compiler must read the values from program memory at run
@@ -24,7 +24,8 @@ const volatile uint8_t Cells[CELLS_SIZE] __at(CELLS_ADDR) = {
    0x05,   // 11 tuning target SWR 1.05
    0x02,   // 12 search effort 2
    0x00,   // 13 classic main screen
-   0x00, 0x00, 0x00         // spare
+   0x00,   // 14 external interface: ICOM (default)
+   0x00, 0x00   // spare
 };
 #else
 extern volatile uint8_t Cells[CELLS_SIZE];   // on the PC: defined by the test / simulator

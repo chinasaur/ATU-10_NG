@@ -13,7 +13,7 @@ XC8    ?= $(firstword $(wildcard /opt/microchip/xc8/*/bin/xc8-cc) xc8-cc)
 CPU     = 16LF18877
 # Device Family Pack from https://packs.download.microchip.com (XC8 v3+ ships without it)
 DFP    ?= $(lastword $(wildcard $(HOME)/.local/share/microchip/packs/PIC16F1xxxx_DFP/*))
-SRC     = $(addprefix src/, app.c board.c buttons.c cells.c config.c display.c i2c_soft.c \
+SRC     = $(addprefix src/, app.c board.c uart.c icom_interface.c buttons.c cells.c config.c display.c i2c_soft.c \
              meas.c meas_math.c nvm.c oled.c relays.c settings.c setup.c text.c timer.c tune.c)
 HDR     = $(wildcard src/*.h)
 # must match the #pragma config values in src/config.c
@@ -52,14 +52,18 @@ dist: $(TARGET).hex LICENSE
 # ---- host unit tests (gcc)
 HOSTCC   = gcc
 HOSTFLAGS = -O2 -std=c99 -Wall -Wextra -D_DEFAULT_SOURCE -Isrc
-TESTS    = cells meas antennas nvm display settings tune
+TESTS    = cells meas antennas nvm display settings tune uart
 
 build/test_%: tests/test_%.c tests/check.h $(HDR) $(wildcard src/*.c tools/sim/*)
 	mkdir -p build
 	$(HOSTCC) $(HOSTFLAGS) -Itools/sim -o $@ $< -lm
 
+build/test_uart: tests/test_uart.c tests/check.h tests/host/xc.h $(HDR) src/uart.c
+	mkdir -p build
+	$(HOSTCC) $(HOSTFLAGS) -Itests/host -o $@ tests/test_uart.c src/uart.c -lm
+
 # the main program with simulated hardware and time (tests/host/xc.h)
-APP_HOST = $(addprefix src/, timer.c buttons.c cells.c settings.c nvm.c tune.c meas_math.c display.c setup.c text.c)
+APP_HOST = $(addprefix src/, timer.c buttons.c cells.c settings.c nvm.c tune.c meas_math.c display.c setup.c text.c icom_interface.c)
 build/test_app: tests/test_app.c tests/host/xc.h $(HDR) $(wildcard src/*.c)
 	mkdir -p build
 	$(HOSTCC) $(HOSTFLAGS) -Wno-unused-parameter -Itests/host -Dmain=app_main -c src/app.c -o build/app_host.o
@@ -68,7 +72,7 @@ build/test_app: tests/test_app.c tests/host/xc.h $(HDR) $(wildcard src/*.c)
 # gcc, python3 and node; the Cells tools are tested on the hex file as it is
 test: $(TARGET).hex $(addprefix build/test_, $(TESTS)) build/test_app
 	@for t in $(TESTS) app; do build/test_$$t || exit 1; done
-	@for v in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31; do build/test_app $$v || exit 1; done
+	@for v in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34; do build/test_app $$v || exit 1; done
 	sh tests/test_tools.sh $(TARGET).hex
 
 # ---- PC simulator of the tuning algorithm (tools/sim, see sim.c)

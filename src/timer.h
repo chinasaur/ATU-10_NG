@@ -7,9 +7,9 @@
 #include <stdint.h>
 
 // press time in 10 ms units while held (saturates at 255), 0 = released
-extern volatile uint8_t btn_held, ext_held;
+extern volatile uint8_t btn_held;
 // length of the last finished press in 10 ms units, 0 = none pending
-extern volatile uint8_t btn_released, ext_released;
+extern volatile uint8_t btn_released;
 
 uint32_t tick_ms(void);                  // read atomically
 

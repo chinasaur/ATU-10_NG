@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Show or change the settings ("Cells") in an ATU-10 NG firmware hex file.
 
-The Cells are 12 BCD coded bytes at byte address 0xEEE0 of the hex file,
+The Cells are 14 BCD coded bytes at byte address 0xEEE0 of the hex file,
 stored as RETLW instructions (high byte 0x34). They fill exactly the two
 records ':10EEE000...' (Cells 1-8) and ':10EEF000...' (Cells 9-12 + 4
 spare). Only these two records are changed, everything else in the file
@@ -16,7 +16,7 @@ Usage:
 import sys
 
 ADDR = 0xEEE0
-COUNT = 13
+COUNT = 14
 RETLW = 0x34
 
 # number, name, unit / meaning, min, max, default  (keep in step with src/cells.c)
@@ -34,6 +34,7 @@ CELLS = [
     (11, 'Tuning target', 'SWR 1 + value / 100, 0 = always full search', 0, 99, 5),
     (12, 'Search effort', '1 = quick, 2 = normal, 3 = thorough', 1, 3, 2),
     (13, 'Display', '0 = classic, 1 = relays (firmware 1.1.0 and later)', 0, 1, 0),
+    (14, 'External interface', '0 = ICOM, 1 = UART', 0, 1, 0),
 ]
 
 

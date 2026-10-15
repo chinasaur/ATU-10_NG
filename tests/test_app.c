@@ -10,6 +10,8 @@
 #include <xc.h>
 #include "../src/board.h"
 #include "../src/timer.h"
+#include "../src/uart.h"
+#include "../src/uart_internal.h"
 #include "../src/meas.h"
 #include "../src/relays.h"
 #include "../src/nvm.h"
@@ -23,6 +25,8 @@ struct LATDbits_t LATDbits; struct LATEbits_t LATEbits; struct PORTAbits_t PORTA
 struct PORTBbits_t PORTBbits; struct PORTDbits_t PORTDbits; struct INTCONbits_t INTCONbits;
 struct IOCBFbits_t IOCBFbits; struct IOCBNbits_t IOCBNbits; struct PIE0bits_t PIE0bits;
 struct PIR0bits_t PIR0bits; struct WDTCON0bits_t WDTCON0bits; struct PCON0bits_t PCON0bits;
+struct PIE4bits_t PIE4bits; struct PIR4bits_t PIR4bits;
+struct TRISDbits_t TRISDbits; struct ODCONDbits_t ODCONDbits;
 uint8_t PCON0_reg, ANSELA, ANSELD;
 volatile uint8_t Cells[16] = {
    0x05, 0x30, 0x10, 0x10, 0x15, 0x13, 0x01, 0x04, 0x14, 0x60, 0x05, 0x02 };
@@ -39,9 +43,21 @@ static int rf_on, sleeps, relay_calls, key_low_in_tune, in_tune;
 static int mode;                     // 0: the main run, else a start-up / Cells variant
 enum { M_MAIN, M_BOR, M_WDT, M_CELLS_MIN, M_CELLS_MAX, M_BLIP, M_UNMATCH, M_NOMATCH, M_EXTDARK, M_NOPOWER, M_LOWPWR, M_EXTTUNE, M_STOPAUTO, M_OVERLOAD, M_PULSE, M_PULSE_SLOW,
        M_RESUME_OFF, M_RESUME_QSY, M_RESUME_EMPTY, M_BATT_DIP, M_HINT, M_BATT_OFF, M_HINT_BLIP, M_HINT_END, M_HINT_CW, M_BATT_HOVER,
-       M_BATT_LOW, M_BATT_MIX, M_BATT_OVL, M_BATT_AUTO, M_BATT_EMPTY, M_RELAYS };
+       M_BATT_LOW, M_BATT_MIX, M_BATT_OVL, M_BATT_AUTO, M_BATT_EMPTY, M_RELAYS, M_UART_COMMANDS, M_ICOM_COMMANDS,
+       M_UART_MENU };
 #define M_RESUME(m) ((m) >= M_RESUME_OFF && (m) <= M_RESUME_EMPTY)
+static int main_scenario(void) { return mode == M_MAIN || mode == M_UART_MENU; }
 static uint32_t last_clr, wdt_worst;
+static uint32_t uart_command_at;
+static uint8_t uart_command_pos;
+static char uart_tx_log[32];
+static uint8_t uart_tx_log_len;
+static const uart_command_result_t uart_test_commands[] = {
+   {UART_COMMAND_BYPASS_ON, 0}, {UART_COMMAND_L_SET, 42}, {UART_COMMAND_L_QUERY, 0},
+   {UART_COMMAND_LAST_SWR_QUERY, 0}, {UART_COMMAND_LAST_SWR_QUERY, 0},
+   {UART_COMMAND_AUTO_QUERY, 0}, {UART_COMMAND_AUTO_OFF, 0}, {UART_COMMAND_AUTO_QUERY, 0},
+   {UART_COMMAND_AUTO_ON, 0}, {UART_COMMAND_AUTO_QUERY, 0}
+};
 static int display_lit;              // the display shows something (switched on)
 static int display_ok = 1, display_inited, oled_inits, oled_ok_writes, key_falls, key_prev = 1;
 static uint32_t disp_us, io_frac;     // time the main program spends on display I/O
@@ -51,6 +67,7 @@ static double opt_l = 20, opt_c = 30;   // best match of the load (capacitor at 
 static uint8_t seen1[2][128][128];   // M_RESUME_OFF: settings switched by the 1st / 2nd tune
 static int n_first, n_again;
 static int batt_hidden, recharge_seen, recharge_late, ovl_seen;
+static int icom_key_low_seen;
 static uint8_t switched[2][128][128];   // M_RELAYS: settings switched by the tune running
 static int live_updates, relays_checks, drawn_prev = -1;
 
@@ -69,11 +86,11 @@ static int n_press = 8;
 static const span_t carrier[] = {
    {5000, 45 * MIN},                 // 45 min of transmitting: auto tune, no power off
    {84 * MIN + 2000, 85 * MIN},      // the carrier for the tune at 84 min
-   {97 * MIN + 1000, 98 * MIN},      // the carrier for the external tune
+   {80 * MIN + 21000, 82 * MIN},     // the carrier for the external tune
 };
 static const span_t ext_start[] = {  // start line of the external interface low
-   {96 * MIN, 96 * MIN + 50},        // short: bypass on
-   {97 * MIN, 97 * MIN + 400},       // long: tune
+   {80 * MIN + 10000, 80 * MIN + 10050}, // short: bypass on
+   {80 * MIN + 20000, 80 * MIN + 20400}, // long: tune
 };
 
 static int in_spans(const span_t *s, int n) {
@@ -107,6 +124,7 @@ static void check_centred(void) {
    CHECK(abs(left - (127 - right)) <= 1);              // as far from both edges
 }
 
+static int line2_checks;
 static void check_line2(void) {
    const uint8_t *fb = disp_fb();
    int dirty = 0;
@@ -190,12 +208,14 @@ void fake_ms(uint32_t ms) {
       PORTBbits.RB5 = !in_spans(press, n_press);                        // low = pressed
       if(mode == M_EXTDARK) PORTDbits.RD1 = !(wall >= 3 * MIN && wall < 3 * MIN + 50);   // short pulse
       else if(mode == M_EXTTUNE) PORTDbits.RD1 = !(wall >= 11000 && wall < 11050);   // during a tune
-      else PORTDbits.RD1 = mode ? 1 : !in_spans(ext_start, 2);          // low = start
-      if(!mode) {                                                        // display unplugged
+      else if(mode == M_ICOM_COMMANDS)
+         PORTDbits.RD1 = !((wall >= 10000 && wall < 10060) || (wall >= 20000 && wall < 20300));
+      else PORTDbits.RD1 = main_scenario() ? !in_spans(ext_start, 2) : 1; // low = start
+      if(main_scenario()) {                                              // display unplugged
          display_ok = !(wall >= 20 * MIN && wall < 40 * MIN);
          if(!display_ok) display_inited = display_lit = 0;   // dark until initialized and on
       }
-      PORTDbits.RD2 = LATDbits.LATD2;                                   // key line as driven
+      PORTDbits.RD2 = cfg[CFG_EXT] == INTERFACE_UART ? 1 : LATDbits.LATD2;
       if(mode == M_EXTDARK || mode == M_BATT_OFF || mode == M_HINT_BLIP || mode == M_HINT_END
          || mode == M_HINT_CW || mode == M_BATT_AUTO || mode == M_BATT_EMPTY) rf_on = 0;
       else if(mode == M_NOPOWER) rf_on = wall >= 60000 && wall < 2 * MIN;   // after the NO POWER
@@ -209,8 +229,10 @@ void fake_ms(uint32_t ms) {
             rf_on |= wall >= 25000 && (wall - 25000) % 15000 < 250;
       }
       else if(mode == M_BATT_OVL) rf_on = wall >= 26000 && wall < 26300;   // a short overload
-      else rf_on = mode ? wall >= 10000 && wall < 5 * MIN : in_spans(carrier, sizeof carrier / sizeof *carrier);
-      if(wall == 100 * MIN && !mode) vbat_mv = 2900;                    // battery empty
+      else if(mode == M_UART_COMMANDS) rf_on = wall >= 10000 && wall < 14000;
+      else rf_on = main_scenario() ? in_spans(carrier, sizeof carrier / sizeof *carrier)
+                                   : wall >= 10000 && wall < 5 * MIN;
+      if(wall == 100 * MIN && main_scenario()) vbat_mv = 2900;           // battery empty
       if(mode == M_RESUME_OFF) vbat_mv = wall >= 15000 && wall < 25000 ? 2900 : 4000;   // LOW BATT
       if(mode == M_RESUME_QSY && wall == 15000) { opt_l = 3; opt_c = 90; }            // other band
       if(mode == M_BATT_DIP)       // low for one reading (every 3 s), for two, then for good
@@ -233,6 +255,10 @@ void fake_ms(uint32_t ms) {
       if(INTCONbits.GIE && PIE0bits.TMR0IE) {
          PIR0bits.TMR0IF = 1;
          isr();
+      }
+      if(!LATDbits.LATD2) {
+         key_low_in_tune = 1;
+         if(mode == M_ICOM_COMMANDS) icom_key_low_seen = 1;
       }
       checkpoint(wall);
       if(wall >= end_at) longjmp(done, 1);
@@ -257,7 +283,7 @@ void fake_sleep(void) {
    CHECK(LATDbits.LATD2 && (ANSELD & 0x06) == 0x06);
    // the last picture before sleeping (the framebuffer keeps it): POWER OFF
    // (button held at 86 min) and LOW BATT (100 min) alone in the middle
-   if(!mode && ((wall >= 86 * MIN && wall < 87 * MIN) || (wall >= 100 * MIN && wall < 101 * MIN))) {
+   if(main_scenario() && ((wall >= 86 * MIN && wall < 87 * MIN) || (wall >= 100 * MIN && wall < 101 * MIN))) {
       check_centred();
       centred_checks++;
    }
@@ -268,6 +294,25 @@ void fake_sleep(void) {
 relays_t rel;
 uint16_t vbat_mv = 4000;
 void board_init(void) { INTCONbits.GIE = 1; PIE0bits.TMR0IE = 1; }
+static int uart_inits;
+void uart_init(void) { uart_inits++; }
+uint8_t uart_tx_string(const char *s) {
+   while(*s && uart_tx_log_len < sizeof uart_tx_log - 1)
+      uart_tx_log[uart_tx_log_len++] = *s++;
+   uart_tx_log[uart_tx_log_len] = 0;
+   return !*s;
+}
+uart_command_result_t uart_command_poll(void) {
+   uart_command_result_t none = {UART_COMMAND_NONE, 0};
+   if(mode != M_UART_COMMANDS ||
+      uart_command_pos >= sizeof uart_test_commands / sizeof uart_test_commands[0] ||
+      wall < uart_command_at)
+      return none;
+   uart_command_at += uart_command_pos == 3 ? 8400 : 300;
+   return uart_test_commands[uart_command_pos++];
+}
+void uart_suspend(void) {}
+void uart_timer_isr(void) {}
 void delay_ms(uint16_t ms) { while(ms--) fake_clrwdt(); }
 void meas_init(void) { adc_on = 1; }
 void meas_off(void) { adc_on = 0; }
@@ -389,7 +434,7 @@ static int battery_px(void) {
 }
 
 static void checkpoint(uint32_t t) {
-   if(mode) { checkpoint_variant(t); return; }
+   if(!main_scenario()) { checkpoint_variant(t); return; }
    if(getenv("TRACE") && t >= 91 * MIN && t <= 91 * MIN + 40000 && t % 500 == 0)
       printf("%6.1f s  btn %d held %3d  oled %d  sleeps %d  relay_ms %d  ticks %u\n", (t - 91 * MIN) / 1000.0,
              !PORTBbits.RB5, btn_held, OLED_PWR, sleeps, cfg[CFG_RELAY_MS], tick_ms());
@@ -404,9 +449,10 @@ static void checkpoint(uint32_t t) {
    case 30000:                       // carrier with SWR > 1.2 since 5 s: auto tune done
       CHECK(tunes_seen());
       CHECK(key_low_in_tune);
-      CHECK(EXT_KEY_OUT);            // released after the tune
+      CHECK(LATDbits.LATD2);         // released after the tune
       CHECK(rel.l == 20 && rel.c == 30 && rel.sw == 0);
       CHECK(st.last_swr > 0);         // the tune result is known (also at SWR 1.00)
+      check_line2();
       break;
    case 20 * MIN:                    // the display is unplugged now
       oled_inits = 0;
@@ -449,6 +495,7 @@ static void checkpoint(uint32_t t) {
       break;
    case 74 * MIN:                    // 29 min without activity: not yet off
       CHECK_EQ(sleeps, 0);
+      CHECK(LATDbits.LATD2);
       break;
    case 76 * MIN:                    // 31 min: switched off
       CHECK_EQ(sleeps, 1);
@@ -458,6 +505,17 @@ static void checkpoint(uint32_t t) {
       CHECK(OLED_PWR);
       CHECK(rel.l == 20 && rel.c == 30);
       CHECK(!st.bypass);
+      break;
+   case 80 * MIN + 12000:            // external short: bypass on
+      CHECK(st.bypass);
+      CHECK(rel.l == 0 && rel.c == 0);
+      break;
+   case 82 * MIN:                    // external long: tuned, bypass ended
+      CHECK(tunes_seen());
+      CHECK(!st.bypass);
+      CHECK(rel.l == 20 && rel.c == 30);
+      CHECK(LATDbits.LATD2);
+      CHECK_EQ(sleeps, 1);
       break;
    case 82 * MIN + 2000:             // short press: bypass
       CHECK(st.bypass);
@@ -470,9 +528,10 @@ static void checkpoint(uint32_t t) {
       break;
    case 85 * MIN + 1000:             // long press, carrier 2 s later: tuned
       CHECK(tunes_seen());
+      CHECK(LATDbits.LATD2);
       CHECK(rel.l == 20 && rel.c == 30 && rel.sw == 0);
-      CHECK(EXT_KEY_OUT);
       CHECK_EQ(sleeps, 1);
+      check_line2();
       break;
    case 89 * MIN:                    // extra long press: off, setting kept
       CHECK_EQ(sleeps, 2);
@@ -485,17 +544,6 @@ static void checkpoint(uint32_t t) {
       CHECK_EQ(ee[0x20 + 3 + CFG_RELAY_MS], 12);
       CHECK(OLED_PWR);
       tunes_seen();
-      break;
-   case 96 * MIN + 2000:             // external short: bypass on
-      CHECK(st.bypass);
-      CHECK(rel.l == 0 && rel.c == 0);
-      break;
-   case 98 * MIN:                    // external long: tuned, bypass ended
-      CHECK(tunes_seen());
-      CHECK(!st.bypass);
-      CHECK(rel.l == 20 && rel.c == 30);
-      CHECK(EXT_KEY_OUT);
-      CHECK_EQ(sleeps, 2);
       break;
    case 104 * MIN:                   // battery empty: switched off
       CHECK_EQ(sleeps, 3);
@@ -770,6 +818,10 @@ static int run_variant(void) {
       static const uint8_t c[12] = {0x01, 0x30, 0x10, 0x10, 0x15, 0x13, 0x01, 0x04, 0x14, 0x60, 0x05, 0x02};
       memcpy((void *)Cells, c, 12);                          // display off after 1 min
    }
+   if(mode == M_UART_COMMANDS) {
+      st.r.l = 15; st.r.c = 16;
+      Cells[CFG_EXT] = INTERFACE_UART;
+   }
    n_press = mode == M_RELAYS ? 2 : 0;
    if(mode == M_BLIP) {                                       // ends 0.4 s after the greeting
       press[0].from = 3800; press[0].to = 4600;
@@ -815,8 +867,23 @@ static int run_variant(void) {
       n_press = 2;
    }
    relay_calls = 0;
+   uart_command_pos = 0;
+   uart_command_at = 6000;
+   uart_tx_log_len = 0;
+   uart_tx_log[0] = 0;
    end_at = 6 * MIN;
    if(!setjmp(done)) app_main();
+   if(mode == M_UART_COMMANDS) {
+      CHECK(st.bypass && st.byp.l == 42);
+      CHECK(!strcmp(uart_tx_log, "42;0;999;+;-;+;"));
+      CHECK_EQ(cfg[CFG_AUTO], 1);
+   }
+   if(mode == M_ICOM_COMMANDS) {
+      CHECK(state_load());
+      CHECK(!st.bypass && st.r.l == 20 && st.r.c == 30);
+      CHECK(icom_key_low_seen);
+      CHECK_EQ(LATDbits.LATD2, 1);
+   }
    printf("watchdog: longest time without clearing %u ms\n", wdt_worst);
    CHECK(wdt_worst < 7000);
    return check_done(mode == M_BOR ? "test_app bor" : mode == M_WDT ? "test_app wdt" :
@@ -834,32 +901,34 @@ static int run_variant(void) {
                      : mode == M_BATT_HOVER ? "test_app batt-hover" : mode == M_BATT_LOW ? "test_app batt-low"
                      : mode == M_BATT_MIX ? "test_app batt-mix" : mode == M_BATT_OVL ? "test_app batt-ovl"
                      : mode == M_BATT_AUTO ? "test_app batt-auto" : mode == M_BATT_EMPTY ? "test_app batt-empty"
+                     : mode == M_UART_COMMANDS ? "test_app uart-commands"
+                     : mode == M_ICOM_COMMANDS ? "test_app icom-commands"
                      : "test_app relays");
 }
 
-int main(int argc, char **argv) {
-   if(argc > 1) {
-      mode = atoi(argv[1]);
-      return run_variant();
-   }
+static int run_main_scenario(void) {
    memset(ee, 0xFF, sizeof ee);
    PORTBbits.RB5 = 1;
    PCON0bits.nPOR = 0;               // a normal power-up
    PCON0bits.nBOR = 1;
    LATDbits.LATD2 = 1;
-   // setup menu, after the greeting (released at 91:07): 2 long presses to
-   // setting 3, a short one (10 -> 12 ms), 11 long ones to the SAVE page, a
-   // short one
    {
+      // After the setup-menu press (released at 91:07), change relay pulse
+      // and save; the UART variant also selects UART on setting 14.
       uint32_t t = 91 * MIN + 9000;
-      for(int i = 0; i < 15; i++, t += 1500) {
-         uint32_t len = (i == 2 || i == 14) ? 100 : 500;
+      int uart_menu = mode == M_UART_MENU;
+      int n = uart_menu ? 17 : 16;
+      for(int i = 0; i < n; i++, t += 1500) {
+         uint32_t len = (i == 2 || (uart_menu ? i == 14 || i == 16 : i == 15)) ? 100 : 500;
          press[n_press].from = t;
          press[n_press++].to = t + len;
       }
    }
    end_at = 105 * MIN;
    if(!setjmp(done)) app_main();     // runs until fake_ms jumps back at end_at
+   CHECK_EQ(cfg[CFG_EXT], mode == M_UART_MENU ? INTERFACE_UART : INTERFACE_ICOM);
+   CHECK_EQ(ee[0xF4], mode == M_UART_MENU ? INTERFACE_UART : INTERFACE_ICOM);
+   CHECK_EQ(uart_inits > 0, mode == M_UART_MENU);
    // the EEPROM holds the tuned setting and the memory
    {
       uint8_t n = 0;
@@ -874,5 +943,13 @@ int main(int argc, char **argv) {
    CHECK_EQ(centred_checks, 2);
    printf("watchdog: longest time without clearing %u ms\n", wdt_worst);
    CHECK(wdt_worst < 7000);
-   return check_done("test_app");
+   return check_done(mode == M_UART_MENU ? "test_app uart-menu" : "test_app");
+}
+
+int main(int argc, char **argv) {
+   if(argc > 1) {
+      mode = atoi(argv[1]);
+      if(mode != M_UART_MENU) return run_variant();
+   }
+   return run_main_scenario();
 }

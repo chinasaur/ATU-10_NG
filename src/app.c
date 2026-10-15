@@ -5,6 +5,8 @@
 // handles the button and the external interface, and runs the timers.
 
 #include "board.h"
+#include "uart.h"
+#include "icom_interface.h"
 #include "timer.h"
 #include "cells.h"
 #include "meas.h"
@@ -48,6 +50,8 @@ static meas_t peak;            // peak hold for the display
 static uint32_t t_peak;
 static uint16_t swr_last;      // last SWR measured with enough power
 static uint16_t swr_disp;      // last SWR measured from SWR_SHOW_UW on, for the display
+static uint16_t swr_live;      // current SWR, zero when forward power is below display threshold
+static uint16_t pwr_live;      // current power in 0.1 W, zero below display threshold
 static uint8_t resume;         // the last tune can be continued (tune_resumable)
 
 // ms since the tick value t. Always read the clock fresh: a timestamp set
@@ -183,6 +187,22 @@ static void wake(void) {                       // something happened: timers res
    if(!disp_is_on()) disp_power(1);            // the framebuffer still holds the picture
 }
 
+static void interface_init(void) {
+   if(cfg[CFG_EXT] == INTERFACE_UART) {
+      icom_interface_suspend();
+      uart_init();
+   }
+   else {
+      uart_suspend();
+      icom_interface_init();
+   }
+}
+
+static void interface_suspend(void) {
+   uart_suspend();
+   icom_interface_suspend();
+}
+
 // ---------------------------------------------------------------- tuning
 
 static void save_state(void) {
@@ -200,13 +220,14 @@ void hal_progress(const relays_t *best, uint16_t swr) {
 }
 uint8_t hal_abort(void) {
    uint8_t ev = buttons_event();
-   // power off, or the transceiver's bypass pulse: after the stop (a tune
-   // request from the transceiver while tuning changes nothing)
+   if(ev == EV_NONE && cfg[CFG_EXT] == INTERFACE_ICOM)
+      ev = icom_interface_event();
+   // power off
    if(ev == EV_XLONG || ev == EV_EXT_SHORT) {
       buttons_unget(ev);
       return 1;
    }
-   return ev == EV_SHORT || ev == EV_LONG;
+   return ev == EV_SHORT || ev == EV_LONG || ev == EV_EXT_SHORT;
 }
 
 // Carrier power for tuning, the same limits as in tune_run: P_OK or why
@@ -275,8 +296,8 @@ static void do_tune(void) {
    uint8_t r, same, why = P_NONE;
    relays_t from = rel;
    wake();
+   icom_interface_tuning(1);
    LED_GREEN = 0;
-   EXT_KEY_OUT = 0;                            // tells the transceiver: tuning
    msg_on = 0;
    disp_big(LINE2, 0, "         ");            // a message may still be there
    disp_big(LINE2, 0, "TUNE");                 // the SWR so far follows at the right
@@ -327,7 +348,7 @@ static void do_tune(void) {
    else if(r == TUNE_ABORTED) message("STOP", 1000);
    else if(r == TUNE_OVERLOAD) message("OVERLOAD", 2000);
    disp_refresh();                             // RF may have garbled the picture
-   EXT_KEY_OUT = 1;
+   icom_interface_tuning(0);
    LED_GREEN = 1;
    auto_cnt = 0;
    t_active = t_tuned = tick_ms();
@@ -350,6 +371,71 @@ static void bypass_toggle(uint8_t on) {
    show_swr_label();
    message(st.bypass ? "BYPASS" : "TUNED", 800);
    auto_cnt = 0;
+}
+
+static void relay_setting_changed(void) {
+   wake();
+   if(!st.bypass) relays_set(rel.l, rel.c, rel.sw);
+   st.last_swr = 0;
+   swr_ref = swr_last = swr_disp = 0;
+   resume = tune_resume = tune_resumable = 0;
+   auto_cnt = 0;
+   t_tuned = tick_ms();
+   save_state();
+   show_relays(&rel);
+   show_swr_label();
+   shown_swr = 0xFFFF;
+   show_swr(0);
+}
+
+// These functions return 1 if the setting changed, else 0.
+static uint8_t set_inductance_relays(uint8_t value) {
+   relays_t *setting = st.bypass ? &st.byp : &rel;
+   if(value > L_MAX || value == setting->l) return 0;
+   setting->l = value;
+   return 1;
+}
+static uint8_t set_capacitance_relays(uint8_t value) {
+   relays_t *setting = st.bypass ? &st.byp : &rel;
+   if(value > C_MAX || value == setting->c) return 0;
+   setting->c = value;
+   return 1;
+}
+static uint8_t set_cap_side(uint8_t side) {
+   relays_t *setting = st.bypass ? &st.byp : &rel;
+   side = side ? 1 : 0;
+   if(setting->sw == side) return 0;
+   setting->sw = side;
+   return 1;
+}
+
+static void uart_reply_decimal(uint16_t value) {
+   char reply[5];
+   uint16_t divisor;
+   uint8_t pos = 0, started = 0;
+
+   for(divisor = 1000; divisor; divisor /= 10) {
+      uint8_t digit = (uint8_t)(value / divisor);
+      value %= divisor;
+      if(started || digit) {
+         reply[pos++] = (char)('0' + digit);
+         started = 1;
+      }
+   }
+   if(!started) reply[pos++] = '0';
+   reply[pos++] = ';';
+   reply[pos] = 0;
+   (void)uart_tx_string(reply);
+}
+
+static void uart_reply_relay_mask(uint8_t inductance) {
+   relays_t *setting = st.bypass ? &st.byp : &rel;
+   uart_reply_decimal(inductance ? setting->l : setting->c);
+}
+
+static void uart_reply_cap_position(void) {
+   relays_t *setting = st.bypass ? &st.byp : &rel;
+   (void)uart_tx_string(setting->sw ? "LC;" : "CL;");
 }
 
 // ---------------------------------------------------------------- power
@@ -379,9 +465,13 @@ static void greeting(void) {
 static void start_screen(void) {
    disp_power(1);
    greeting();
-   if(btn_held >= SETUP_HOLD) setup_run();     // held through the greeting
+   if(btn_held >= SETUP_HOLD) {
+      setup_run();                             // held through the greeting
+      interface_init();
+   }
    show_screen();
    buttons_clear();                            // the press that woke us is no event
+   icom_interface_clear();
    t_active = tick_ms();
 }
 
@@ -417,13 +507,13 @@ static void power_off(void) {
    LED_RED = 1;
    LED_GREEN = 1;
    WDT_OFF();
+   interface_suspend();
    INTCONbits.GIE = 0;
    PIE0bits.TMR0IE = 0;
    IOCBNbits.IOCBN5 = 1;                       // wake on the button going low
    PIE0bits.IOCIE = 1;
    meas_off();
-   ANSELD |= 0b00000110;                       // external interface: no input buffer
-                                               // on lines that may be open
+   ANSELD |= 0b00000110;                       // UART pins: no input buffer while asleep
    for(;;) {
       delay_ms(100);
       IOCBFbits.IOCBF5 = 0;
@@ -433,6 +523,7 @@ static void power_off(void) {
       if(n == 16) break;
    }
    ANSELD &= (uint8_t)~0b00000110;
+   interface_init();
    PIE0bits.IOCIE = 0;
    IOCBNbits.IOCBN5 = 0;
    IOCBFbits.IOCBF5 = 0;
@@ -513,6 +604,8 @@ static void watch(void) {
    pw = tune_power(&m);
    if(pw == P_OK || pw == P_HIGH) swr_last = swr;
    if(pw != P_NONE) swr_disp = swr;
+   swr_live = pw != P_NONE ? swr : 0;
+   pwr_live = pw != P_NONE ? p10 : 0;
 
    // auto tune: power for tuning, SWR above 1.20 and changed by more than
    // Cell 6 since the last tune (not again right after a tune, and not
@@ -537,6 +630,7 @@ void main(void) {
    board_init();
    bor_only = PCON0bits.nPOR && !PCON0bits.nBOR;
    settings_load();
+   interface_init();
    meas_init();
    batt_start();
    mem_load();
@@ -554,7 +648,6 @@ void main(void) {
       if(batt_lvl != B_OFF) relays_set(0, 0, 0);
    }
    swr_ref = st.last_swr ? (uint16_t)(100 + st.last_swr) : 0;
-   EXT_KEY_OUT = 1;
    if(batt_lvl == B_OFF) {                     // empty: LOW BATT at once, no greeting
       go_off = 2;
       buttons_clear();
@@ -565,11 +658,48 @@ void main(void) {
    }
    WDT_ON();
    t_batt = t_watch = t_show = t_refresh = tick_ms();
+   uart_command_result_t uart_command;
 
    for(;;) {
       CLRWDT();
 
+      if(cfg[CFG_EXT] == INTERFACE_UART) {
+         uart_command = uart_command_poll();
+         switch(uart_command.command) {
+         case UART_COMMAND_BYPASS_OFF:    wake(); bypass_toggle(0); break;
+         case UART_COMMAND_BYPASS_ON:     wake(); bypass_toggle(1); break;
+         case UART_COMMAND_AUTO_OFF:      wake(); cfg[CFG_AUTO] = 0; auto_cnt = 0; auto_tune = 0; break;
+         case UART_COMMAND_AUTO_ON:       wake(); cfg[CFG_AUTO] = 1; break;
+         case UART_COMMAND_AUTO_QUERY:    (void)uart_tx_string(cfg[CFG_AUTO] ? "+;" : "-;"); break;
+         case UART_COMMAND_L_SET:
+            if(set_inductance_relays(uart_command.argument)) relay_setting_changed();
+            break;
+         case UART_COMMAND_C_SET:
+            if(set_capacitance_relays(uart_command.argument)) relay_setting_changed();
+            break;
+         case UART_COMMAND_L_QUERY:       uart_reply_relay_mask(1); break;
+         case UART_COMMAND_C_QUERY:       uart_reply_relay_mask(0); break;
+         case UART_COMMAND_BYPASS_QUERY:  (void)uart_tx_string(st.bypass ? "+;" : "-;"); break;
+         case UART_COMMAND_CAP_LOAD:
+            if(set_cap_side(1)) relay_setting_changed();
+            break;
+         case UART_COMMAND_CAP_SOURCE:
+            if(set_cap_side(0)) relay_setting_changed();
+            break;
+         case UART_COMMAND_CAP_POSITION_QUERY: uart_reply_cap_position(); break;
+         case UART_COMMAND_SWR_QUERY:     uart_reply_decimal(swr_live); break;
+         case UART_COMMAND_LAST_SWR_QUERY:
+            uart_reply_decimal(swr_disp);
+            break;
+         case UART_COMMAND_PEAK_POWER_QUERY: uart_reply_decimal(pwr_x10(peak.pf)); break;
+         case UART_COMMAND_POWER_QUERY:      uart_reply_decimal(pwr_live); break;
+         case UART_COMMAND_NONE:          break;
+         }
+      }
+
       ev = buttons_event();
+      if(ev == EV_NONE && cfg[CFG_EXT] == INTERFACE_ICOM)
+         ev = icom_interface_event();
       // a dark display: a button press only wakes it (the user could not
       // see what it would do); the transceiver's commands and power off act
       if((ev == EV_SHORT || ev == EV_LONG) && !disp_is_on()) {

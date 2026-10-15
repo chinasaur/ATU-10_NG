@@ -8,7 +8,7 @@
 #define SET_MAGIC  0x5E
 #define SET_ADDR   0x20              // Cells 1..12: 16 bytes
 #define SET_N      12
-#define EXT_ADDR   0xF0              // Cells 13..: 3 + n + 1 bytes
+#define EXT_ADDR   0xF0              // Cells 13..14: 3 + n + 1 bytes
 #define EXT_N      (CELL_COUNT - SET_N)
 
 static void load(uint8_t addr, uint8_t first, uint8_t n) {
@@ -35,6 +35,7 @@ static void save(uint8_t addr, uint8_t first, uint8_t n) {
 void settings_load(void) {
    cells_load();
    load(SET_ADDR, 0, SET_N);
+   load(EXT_ADDR, SET_N, 1);         // older extension block with Cell 13 only
    load(EXT_ADDR, SET_N, EXT_N);
 }
 

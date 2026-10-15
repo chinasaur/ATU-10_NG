@@ -10,11 +10,8 @@
 
 #define _XTAL_FREQ 32000000UL
 
-// Button and external interface (both active low)
+// Button (active low)
 #define BUTTON_DOWN   (!PORTBbits.RB5)
-#define EXT_START     (!PORTDbits.RD1)      // tune request from the transceiver
-#define EXT_KEY_IN    (PORTDbits.RD2)       // key line as seen on the pin
-#define EXT_KEY_OUT   LATDbits.LATD2        // 0 = tuning in progress (open drain)
 
 // LEDs (active low)
 #define LED_RED       LATBbits.LATB4

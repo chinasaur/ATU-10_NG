@@ -5,6 +5,7 @@ tag `vX.Y.Z` in this repository; the hex file is on its release page.
 
 ## Contents
 
+- [1.2.0](#120)
 - [1.1.0](#110)
 - [1.0.0](#100)
 - [0.9.6](#096)
@@ -15,6 +16,16 @@ tag `vX.Y.Z` in this repository; the hex file is on its release page.
 - [0.9.1](#091)
 - [0.9.0](#090)
 - [0.1.0](#010)
+
+## 1.2.0
+
+2026-10-20
+
+- Adds optional UART interface on the EXT port.
+- Menu setting 14 selects either old Icom keying interface (default) or the new
+  software UART interface on EXT port.
+- UART tested on device with an ESP32-C3 bridging commands between ATU-10 and client
+  (PC or Android phone).
 
 ## 1.1.0
 

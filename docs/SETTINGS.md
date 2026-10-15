@@ -5,7 +5,7 @@
 > device does it. Editing the hex file still works as before, and a browser
 > editor makes that easy too.
 
-There are three ways, for the same 13 settings:
+There are three ways, for the same 14 settings:
 
 1. the setup menu on the tuner – quick, anywhere
 2. the Cell editor in the browser – changes the hex file, with explanations
@@ -13,7 +13,7 @@ There are three ways, for the same 13 settings:
 
 ## Contents
 
-- [The 13 settings](#the-13-settings)
+- [The 14 settings](#the-14-settings)
 - [1. Setup menu on the tuner](#1-setup-menu-on-the-tuner)
   - [Opening the menu](#opening-the-menu)
   - [Changing a setting](#changing-a-setting)
@@ -26,7 +26,7 @@ There are three ways, for the same 13 settings:
   - [The values are written as decimal digits (BCD)](#the-values-are-written-as-decimal-digits-bcd)
   - [The checksum at the end of each line](#the-checksum-at-the-end-of-each-line)
 
-## The 13 settings
+## The 14 settings
 
 | # | Setting | Meaning | Range | Default | Values in the menu |
 |---|---|---|---|---|---|
@@ -43,13 +43,15 @@ There are three ways, for the same 13 settings:
 | 11 | Tune target | stop at SWR 1 + value / 100; 0 = always the full search | 0..99 | 5 (SWR 1.05) | full, 1.02, 1.03, 1.05, 1.08, 1.10, 1.15, 1.20 |
 | 12 | Search effort | 1 quick, 2 normal, 3 thorough | 1..3 | 2 (normal) | quick, normal, thorough |
 | 13 | Display | main screen: 0 = classic (power and SWR big), 1 = relays (the L and C relays, see [Relay view](../README.md#relay-view)) | 0..1 | 0 (classic) | classic, relays |
+| 14 | EXT interface | 0 = legacy ICOM keying, 1 = software UART commands | 0..1 | 0 (ICOM) | ICOM, UART |
 
 Settings 8 and 9 calibrate the power reading of the detector diodes
 (P = a·V² + b·V); the defaults fit the BAT41 diodes of the ATU-10. The tuning
 itself compares reflected to forward power and hardly depends on them.
 
-Setting 13 exists from firmware 1.1.0 on. Older hex files have a spare byte
-`00` in its place, which means the classic screen.
+Setting 13 exists from firmware 1.1.0 on. Setting 14 uses the next spare byte;
+older hex files have `00` there, selecting the legacy ICOM interface. Only
+one interface is active at a time because ICOM and UART share the EXT pins.
 
 ## 1. Setup menu on the tuner
 
@@ -100,11 +102,11 @@ After setting 13 a long press leads to three more pages. On each of them a
 |---|---|---|
 | **SAVE**: keeps the values as shown and leaves the menu | **HEX VALUES**: back to the values of the hex file | **EXIT**: leaves the menu, changes are dropped |
 
-**SAVE** stores the 13 values in the tuner's data EEPROM. They apply from now
+**SAVE** stores the 14 values in the tuner's data EEPROM. They apply from now
 on, also after switching off and after a battery change.
 
 **HEX VALUES** deletes the values that were saved in the menu. From then on
-the tuner uses the 13 settings ("Cells") that are written in the firmware hex
+the tuner uses the 14 settings ("Cells") that are written in the firmware hex
 file again – for a hex file as published, these are the defaults in the table
 above. In detail:
 
@@ -132,9 +134,11 @@ file had at that moment (a checksum of them).
 | a hex file with **other** Cells flashed (edited Cells, or a version with other defaults) | the Cells of the new hex file; the saved menu values are ignored |
 | HEX VALUES chosen in the menu | the Cells of the hex file |
 
-Settings 1 to 12 and setting 13 are checked separately (setting 13 came
-with 1.1.0). An update from 1.0.0 therefore keeps the menu values of
-settings 1 to 12; setting 13 starts with the value of the hex file.
+Settings 1 to 12 and settings 13 to 14 are checked separately. An update
+from 1.0.0 therefore keeps the menu values of settings 1 to 12; settings
+13 and 14 start with the values of the hex file. Existing saved setting 13
+values are also retained when updating from a version that had only that
+extension setting.
 
 The tuner keeps its settings in the data EEPROM. Whether the USB programmer
 erases that memory when a new hex file is flashed is not documented; if it
@@ -162,7 +166,8 @@ file that runs in any browser, offline – nothing is uploaded anywhere.
 5. Flash the saved file as usual: copy it onto the tuner's USB drive.
 
 The editor reads the firmware version from the hex file and shows only the
-settings that version has: setting 13 from 1.1.0 on.
+settings that version has: setting 13 from 1.1.0 on and setting 14 from the
+version that adds ICOM/UART selection.
 
 The editor changes only the two lines with the Cells and their checksums;
 everything else in the file stays byte for byte the same.
@@ -171,7 +176,7 @@ everything else in the file stays byte for byte the same.
 
 ### Where the settings are
 
-The hex file is a text file in the Intel HEX format. The 13 settings are in
+The hex file is a text file in the Intel HEX format. The 14 settings are in
 two lines near the end, starting with `:10EEE000` and `:10EEF000`
 (address 0xEEE0 in the program memory). In the hex file of version 1.1.0:
 
@@ -197,9 +202,10 @@ start of the line
 - Each setting is a **pair of bytes: the value, then `34`**. Only change the
   value; the `34` must stay (together the two bytes form a "RETLW" instruction
   of the processor).
-- The first line holds settings 1 to 8, the second line settings 9 to 13 and
-  then three spare pairs `00 34`, which must stay as they are. (Up to 1.0.0
-  setting 13 was a spare pair as well; `00` means the classic screen.)
+- The first line holds settings 1 to 8, the second line settings 9 to 14 and
+  then two spare pairs `00 34`, which must stay as they are. (Up to 1.0.0
+  setting 13 was a spare pair; `00` means the classic screen. Cell 14 was
+  also spare, so `00` selects ICOM.)
 
 ### The values are written as decimal digits (BCD)
 

@@ -39,5 +39,8 @@ int main(void) {
    CHECK_EQ(cfg[CFG_LAYOUT], 0);
    CHECK_EQ(cell_decode(CFG_LAYOUT, 0x01), 1);
    CHECK_EQ(cell_decode(CFG_LAYOUT, 0x02), 0);
+   CHECK_EQ(cfg[CFG_EXT], INTERFACE_ICOM);
+   CHECK_EQ(cell_decode(CFG_EXT, 0x01), INTERFACE_UART);
+   CHECK_EQ(cell_decode(CFG_EXT, 0x02), INTERFACE_ICOM);
    return check_done("test_cells");
 }

@@ -26,8 +26,8 @@ META_PY=$(python3 -c "import sys; sys.path.insert(0, 'tools'); import cells; pri
 test "$META_JS" = "$META_PY"
 # the editor reads the firmware version from the hex file
 test "$(node tests/cell_editor.mjs $ED --version "$HEX")" = "$(sed -n 's/.*FW_VERSION "\(.*\)"/\1/p' src/version.h)"
-# Cell 13 only for firmware that has it
-test "$(node tests/cell_editor.mjs $ED --count)" = "12 12 13 13 13"
+# Cells 13 and 14 only for firmware that has them
+test "$(node tests/cell_editor.mjs $ED --count)" = "12 12 13 14 14 14"
 node tests/cell_editor.mjs $ED "$HEX" $T/e.hex 3=12 11=0 12=3
 cmp $T/a.hex $T/e.hex
 node tests/cell_editor.mjs $ED "$HEX" $T/f.hex

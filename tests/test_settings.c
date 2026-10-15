@@ -86,6 +86,19 @@ int main(void) {
    Cells[CFG_LAYOUT] = 0x00;
    settings_load();
    CHECK_EQ(cfg[CFG_LAYOUT], 0);
+   // An older extension block (Cell 13 only) still restores its setting.
+   {
+      static const uint8_t old[5] = {0x5E, 0, 0, 1, 0};
+      uint16_t h13 = cells_hash(13);
+      for(int i = 0; i < 6; i++) ee[0xF0 + i] = 0xFF;
+      memcpy(&ee[0xF0], old, sizeof old);
+      ee[0xF1] = (uint8_t)(h13 >> 8);
+      ee[0xF2] = (uint8_t)h13;
+      ee[0xF4] = crc8(&ee[0xF0], 4);
+      settings_load();
+      CHECK_EQ(cfg[CFG_LAYOUT], 1);
+      CHECK_EQ(cfg[CFG_EXT], INTERFACE_ICOM);
+   }
    CHECK_EQ(cfg[CFG_RELAY_MS], 12);
    // a damaged Cell 13 block is ignored, the other one applies
    Cells[CFG_LAYOUT] = 0x01;
@@ -103,8 +116,8 @@ int main(void) {
    Cells[CFG_LAYOUT] = 0x00;
    settings_defaults();
    CHECK_EQ(ee[0xF0], 0xFF);
-   // only 0x20..0x2F and 0xF0..0xF4 used
+   // only 0x20..0x2F and 0xF0..0xF5 used
    for(int i = 0; i < 256; i++)
-      if((i < 0x20 || i > 0x2F) && (i < 0xF0 || i > 0xF4)) CHECK_EQ(ee[i], 0xFF);
+      if((i < 0x20 || i > 0x2F) && (i < 0xF0 || i > 0xF5)) CHECK_EQ(ee[i], 0xFF);
    return check_done("test_settings");
 }

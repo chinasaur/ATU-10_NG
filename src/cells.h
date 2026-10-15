@@ -1,4 +1,4 @@
-// Settings ("Cells"): 12 BCD coded bytes at a fixed place in program
+// Settings ("Cells"): 14 BCD coded bytes at a fixed place in program
 // memory, word address 0x7770 (byte address 0xEEE0 in the hex file), so
 // they can be changed in the hex file without rebuilding the firmware.
 // Decoding is free of hardware access and also builds on the PC.
@@ -9,8 +9,8 @@
 #include <stdint.h>
 
 #define CELLS_ADDR  0x7770
-#define CELL_COUNT  13
-// 16 words reserved, the last 3 are spare (0x00): the Cells fill exactly two
+#define CELL_COUNT  14
+// 16 words reserved, the last 2 are spare (0x00): the Cells fill exactly two
 // hex records (:10EEE000 and :10EEF000) that hold nothing else
 #define CELLS_SIZE  16
 
@@ -28,8 +28,11 @@ enum {
    CFG_PEAK,         // 10 peak hold time for the power display in 10 ms
    CFG_TARGET,       // 11 tuning target: SWR 1 + value / 100, 0 = always full search
    CFG_SEARCH,       // 12 search effort 1..3
-   CFG_LAYOUT,       // 13 main screen: 0 = classic, 1 = relays (older hex files: spare 0x00)
+   CFG_LAYOUT,       // 13 main screen: 0 = classic, 1 = relays
+   CFG_EXT,          // 14 external interface: 0 = ICOM, 1 = UART (older hex files: spare 0x00)
 };
+
+enum { INTERFACE_ICOM, INTERFACE_UART };
 
 extern uint8_t cfg[CELL_COUNT];                 // decoded, decimal
 extern const uint8_t cell_min[CELL_COUNT], cell_max[CELL_COUNT], cell_def[CELL_COUNT];
